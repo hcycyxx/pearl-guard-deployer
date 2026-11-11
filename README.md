@@ -5,7 +5,7 @@ Windows 一键部署版。安装包内含 Pearl 守护器、SRBMiner 3.8.0、显
 ## 下载
 
 - [PearlGuard-V2.2.0-Setup.exe](dist/PearlGuard-V2.2.0-Setup.exe)
-- SHA256：`68F3DAF42855E01D7DB0FF6EE7C3DAB32CBD685F8E30D9520FEFB4B4B067AF37`
+- SHA256：`DB9D23553F082478B0B8DCFDBE87F92B913C4FCCF509A739AC8C77ABD0C2DC4E`
 
 ## 功能
 
@@ -64,6 +64,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -SkipBuild
 - 静默卸载退出码 0，保留用户配置供重装使用。
 - 新 EXE 通过现有单实例唤醒通道启动并退出码 0，没有新增挖矿进程。
 - 720p 级界面构造与滚动预览通过。
+- 安装器在未识别 AMD/NVIDIA 显卡时显示醒目警告，不静默使用空名称。
 
 ## 尚未验证
 

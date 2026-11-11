@@ -59,6 +59,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "启动 Pearl 守护器"; Flags:
 var
   ProbeResultPage: TOutputMsgWizardPage;
   WorkerEdit: TNewEdit;
+  WarningLabel: TNewStaticText;
   WorkerLabel: TNewStaticText;
   DetectedWorker: String;
   DetectedGpu: String;
@@ -98,7 +99,7 @@ var
   ProbePath, ResultPath, Json, Worker: String;
   Lines: TArrayOfString;
 begin
-  DetectedGpu := '未识别独立显卡';
+  DetectedGpu := '未识别支持的 NVIDIA / AMD 独立显卡';
   DetectedWorker := 'PearlRig';
   ExtractTemporaryFile('gpu_probe.ps1');
   ProbePath := ExpandConstant('{tmp}\gpu_probe.ps1');
@@ -129,7 +130,7 @@ begin
     Worker := JsonValue(Json, 'worker');
     if Worker <> '' then DetectedWorker := Worker;
   end;
-  if DetectedGpu = '' then DetectedGpu := '未识别独立显卡';
+  if DetectedGpu = '' then DetectedGpu := '未识别支持的 NVIDIA / AMD 独立显卡';
   if DetectedWorker = '' then DetectedWorker := 'PearlRig';
 end;
 
@@ -152,6 +153,13 @@ begin
   WorkerLabel.Top := ScaleY(74);
   WorkerLabel.Width := ScaleX(360);
   WorkerLabel.Caption := '矿工名（自动填入显卡型号，可修改）：';
+  WarningLabel := TNewStaticText.Create(ProbeResultPage);
+  WarningLabel.Parent := ProbeResultPage.Surface;
+  WarningLabel.Left := ScaleX(0);
+  WarningLabel.Top := ScaleY(126);
+  WarningLabel.Width := ScaleX(430);
+  WarningLabel.Caption := '';
+  WarningLabel.Font.Color := clRed;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -200,6 +208,9 @@ begin
     ProbeResultPage.Description :=
       '已识别显卡：' + DetectedGpu + #13#10#13#10 +
       '矿工名可在下方修改。风扇、功耗和超频参数不会写入配置。';
+    if DetectedGpu = '未识别支持的 NVIDIA / AMD 独立显卡' then
+      WarningLabel.Caption :=
+        '未检测到受支持的 AMD / NVIDIA 显卡。请先安装显卡驱动，并核对矿工名。';
   end;
 end;
 

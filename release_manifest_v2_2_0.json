@@ -1,0 +1,18 @@
+[
+  {
+    "Path": "dist/PearlGuard-V2.2.0-Setup.exe",
+    "SHA256": "68F3DAF42855E01D7DB0FF6EE7C3DAB32CBD685F8E30D9520FEFB4B4B067AF37"
+  },
+  {
+    "Path": "pearl_guard.py",
+    "Version": "2.2.0"
+  },
+  {
+    "Path": "gpu_info.py",
+    "Purpose": "GPU and machine model detection"
+  },
+  {
+    "Path": "installer/Pearl守护器_V2.2.0.iss",
+    "Compiler": "Inno Setup 6.7.3"
+  }
+]

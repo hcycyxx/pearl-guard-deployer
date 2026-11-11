@@ -1,0 +1,29 @@
+{
+  "version": "2.2.0",
+  "detected_gpu": {
+    "gpu_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "vendor": "NVIDIA",
+    "worker": "RTX3060",
+    "fallback_worker": "LENOVO-INVALID",
+    "gpus": [
+      {
+        "name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "vendor": "NVIDIA",
+        "worker": "RTX3060"
+      }
+    ]
+  },
+  "checks": [
+    "NVIDIA 和 AMD 型号转换为矿工名",
+    "显卡、功耗、核心和显存默认不设置",
+    "矿工路径使用安装目录相对路径",
+    "主窗口最小高度 520，小屏可滚动",
+    "设置窗口可滚动",
+    "768 高度界面预览"
+  ],
+  "not_tested": [
+    "目标电脑全新安装",
+    "不同显卡真实算力与温度",
+    "真实 Alt+0 和托盘交互"
+  ]
+}

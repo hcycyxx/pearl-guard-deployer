@@ -1,0 +1,21 @@
+{
+  "miner_exe": "miner\\SRBMiner-MULTI.exe",
+  "pool": "prl.kryptex.network:8048",
+  "account": "krxX72P2ZE",
+  "worker": "{WORKER}",
+  "api_port": 21550,
+  "fan": 0,
+  "power_limit": 0,
+  "global_hotkey": true,
+  "close_to_tray": true,
+  "core_offset": 0,
+  "mem_offset": 0,
+  "extra_args": "",
+  "sched_enable": false,
+  "sched_start": "18:00",
+  "sched_stop": "08:00",
+  "check_interval": 5,
+  "restart_delay": 5,
+  "api_fail_limit": 2,
+  "zero_hash_limit": 60
+}

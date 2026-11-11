@@ -1,0 +1,13 @@
+__pycache__/
+build/
+build_*/
+diagnostics/
+dist/onefile/
+dist/*.spec
+package/
+*.spec
+*.lnk
+__pycache__/
+*.pyc
+install_test/
+install_test.log

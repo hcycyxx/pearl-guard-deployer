@@ -92,3 +92,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -SkipBuild
 - 真实用户操作下的 Alt+0、托盘和安装向导页面。
 
 SRBMiner 使用和设备条件请以其随包 `ReadMe.txt` 和 [官方参数](https://github.com/doktor83/SRBMiner-Multi/blob/3.8.0/Parameters)为准。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。任何人都可以免费使用、复制、修改、合并、发布、分发、再许可和商业使用；分发时请保留版权声明和许可证文本。

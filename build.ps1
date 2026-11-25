@@ -9,11 +9,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $project = $PSScriptRoot
-$version = "2.3.0"
+$version = "2.3.2"
 $dist = Join-Path $project "dist"
 $onefile = Join-Path $dist "onefile"
-$work = Join-Path $project "build_v2_3_0"
-$package = Join-Path $project "package\v2.3.0"
+$work = Join-Path $project "build_v2_3_2"
+$package = Join-Path $project "package\v2.3.2"
 $minerDest = Join-Path $package "miner"
 $installerSource = Join-Path $project "installer"
 $env:PEARL_PACKAGE_ROOT = $package
@@ -61,8 +61,8 @@ try {
 Copy-Item -LiteralPath $GuardExe -Destination (Join-Path $package "PearlGuard.exe") -Force
 Copy-Item -LiteralPath (Join-Path $installerSource "gpu_probe.ps1") -Destination $package -Force
 Copy-Item -LiteralPath (Join-Path $installerSource "config.template.json") -Destination $package -Force
-Copy-Item -LiteralPath (Join-Path $project "使用说明_V2.3.0.txt") -Destination $package -Force
-& $ISCC (Join-Path $installerSource "Pearl守护器_V2.3.0.iss")
+Copy-Item -LiteralPath (Join-Path $project "使用说明_V2.3.2.txt") -Destination $package -Force
+& $ISCC (Join-Path $installerSource "Pearl守护器_V2.3.2.iss")
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup 构建失败" }
 
 $setupName = "PearlGuard-V$version-Setup.exe"

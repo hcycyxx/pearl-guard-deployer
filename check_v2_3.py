@@ -41,6 +41,26 @@ def release_for(version, data):
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_official_requests_retry_without_an_unreachable_proxy(self):
+        for url in (update.RELEASE_URL, release_for("3.9.0", b"zip").url):
+            with self.subTest(url=url):
+                response = io.BytesIO(b"official response")
+                def unavailable_proxy(request, **_):
+                    request.set_proxy("127.0.0.1:10809", "http")
+                    raise URLError("proxy offline")
+
+                with (
+                    patch.object(update.urllib.request, "urlopen", side_effect=unavailable_proxy),
+                    patch.object(update, "_windows_curl", return_value=None),
+                    patch.object(update.urllib.request, "build_opener") as opener,
+                ):
+                    opener.return_value.open.return_value = response
+                    self.assertIs(update._request(url), response)
+                    self.assertEqual(opener.call_args.args[0].proxies, {})
+                    direct_request = opener.return_value.open.call_args.args[0]
+                    self.assertEqual(direct_request.full_url, url)
+                    self.assertNotEqual(direct_request.host, "127.0.0.1:10809")
+
     def test_official_assets_and_stable_version_order(self):
         self.assertGreater(update.version_key("3.10.0"), update.version_key("3.9.0"))
         release = release_for("3.10.0", b"zip")
@@ -54,7 +74,7 @@ class ReleaseTests(unittest.TestCase):
                 },
             ],
         }
-        with patch.object(update, "_request", side_effect=lambda _: io.BytesIO(json.dumps(record).encode())):
+        with patch.object(update, "_request", side_effect=lambda *_: io.BytesIO(json.dumps(record).encode())):
             self.assertEqual(update.check_release(), release)
             record["assets"][1]["digest"] = None
             self.assertFalse(update.check_release().url)
@@ -141,7 +161,7 @@ class WindowTests(unittest.TestCase):
         if corrupt:
             data = archive_contents("6.0.0")
             self.assertEqual(len(data), release.size)
-        self.mock(update, "_request", side_effect=lambda _: io.BytesIO(data))
+        self.mock(update, "_request", side_effect=lambda *_: io.BytesIO(data))
         return release
 
     def test_automatic_check_download_switch_and_healthy_version(self):
@@ -155,12 +175,12 @@ class WindowTests(unittest.TestCase):
         begin, proceed = threading.Event(), threading.Event()
         stage = window.miner_install.stage
 
-        def wait_before_stage(release, progress):
+        def wait_before_stage(release, progress, proxy=""):
             progress("正在下载 50%")
             begin.set()
             if not proceed.wait(5):
                 raise RuntimeError("test download gate")
-            stage(release, progress)
+            stage(release, progress, proxy)
 
         with patch.object(window.miner_install, "stage", side_effect=wait_before_stage):
             window._scheduled_miner_check()
@@ -258,6 +278,35 @@ class WindowTests(unittest.TestCase):
         window._tick()
         self.assertEqual(self.spawn.call_count, 2)
         self.assertEqual(window.proc.command, [str(self.base)])
+
+    def test_settings_remain_interactive_while_gpu_probe_is_blocked(self):
+        probe_started = threading.Event()
+        release_probe = threading.Event()
+        probe_timeout = threading.Event()
+
+        def slow_probe():
+            probe_started.set()
+            if not release_probe.wait(3):
+                probe_timeout.set()
+            return {"gpu_name": "Test GPU"}
+
+        cfg = {**self.win.cfg, "power_limit": 140}
+        with patch.object(guard, "detect_gpu", side_effect=slow_probe), patch.object(
+            guard, "query_power_range", return_value=(30, 120)
+        ):
+            dialog = guard.SettingsDialog(cfg, self.win)
+            try:
+                self.assertTrue(probe_started.wait(1))
+                guard.QTimer.singleShot(0, release_probe.set)
+                guard.QTimer.singleShot(250, dialog.reject)
+                dialog.exec()
+                self.assertFalse(probe_timeout.is_set())
+                self.assertEqual(dialog.gpu_label.text(), "Test GPU")
+                self.assertEqual(dialog.power_range, (30, 120))
+                self.assertEqual(dialog.sp_power.value(), 140)
+            finally:
+                release_probe.set()
+                dialog.deleteLater()
 
     def test_first_run_requires_account_and_owner_confirmation(self):
         window = self.win

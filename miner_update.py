@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 import urllib.error
 import urllib.parse
@@ -74,16 +76,64 @@ class Release:
     size: int = 0
 
 
-def _request(url: str):
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "PearlGuard/2.3", "Accept": "application/vnd.github+json"},
-    )
-    return urllib.request.urlopen(req, timeout=15)
+def _windows_curl() -> Path | None:
+    if os.name != "nt":
+        return None
+    exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "curl.exe"
+    return exe if exe.is_file() else None
 
 
-def check_release() -> Release:
-    with _request(RELEASE_URL) as response:
+@contextmanager
+def _windows_download(exe: Path, url: str, headers: dict[str, str], proxy: str = ""):
+    # Windows curl uses the OS trust store and streams the body to the update worker.
+    args = [
+        str(exe), "--disable", "--noproxy", "" if proxy else "*",
+        "--proto", "=https", "--proto-redir", "=https",
+        "--fail", "--silent", "--show-error", "--location", "--connect-timeout", "12",
+        "--speed-limit", "1", "--speed-time", "30", "--max-time", "1800",
+        "--user-agent", headers["User-Agent"], "--header", f"Accept: {headers['Accept']}", url,
+    ]
+    if proxy:
+        args[2:2] = ["--proxy", proxy]
+    with subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW,
+    ) as process:
+        try:
+            yield process.stdout
+            if process.wait(timeout=5):
+                detail = process.stderr.read(2048).decode(errors="replace").strip()
+                raise urllib.error.URLError(detail or "GitHub 连接失败")
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+
+def _request(url: str, proxy: str = ""):
+    accept = "application/vnd.github+json" if url == RELEASE_URL else "application/octet-stream"
+    headers = {"User-Agent": "PearlGuard/2.3", "Accept": accept}
+    curl = _windows_curl()
+    if proxy:
+        if curl:
+            return _windows_download(curl, url, headers, proxy)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}))
+        return opener.open(urllib.request.Request(url, headers=headers), timeout=20)
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15)
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (407, 408, 429, 500, 502, 503, 504):
+            raise
+        exc.close()
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        pass
+    if curl:
+        return _windows_download(curl, url, headers)
+    # The proxy handler mutates its Request, so send a fresh one for the direct connection.
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return direct.open(urllib.request.Request(url, headers=headers), timeout=20)
+
+
+def check_release(proxy: str = "") -> Release:
+    with _request(RELEASE_URL, proxy) as response:
         data = json.loads(response.read(2 * 1024 * 1024))
     if data.get("draft") is not False or data.get("prerelease") is not False:
         raise ValueError("GitHub 没有返回正式发布版")
@@ -184,7 +234,7 @@ class MinerInstall:
         self.state = state  # Recover the running session even if the disk is no longer writable.
         self._save(state)
 
-    def stage(self, release: Release, progress):
+    def stage(self, release: Release, progress, proxy: str = ""):
         if not release.url or not release.sha256:
             raise ValueError("官方 Windows x64 ZIP 缺少 SHA256")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -201,7 +251,7 @@ class MinerInstall:
             archive = folder / "miner.zip"
             sha256 = hashlib.sha256()
             read = 0
-            with _request(release.url) as response, archive.open("wb") as out:
+            with _request(release.url, proxy) as response, archive.open("wb") as out:
                 while chunk := response.read(256 * 1024):
                     read += len(chunk)
                     if read > release.size:

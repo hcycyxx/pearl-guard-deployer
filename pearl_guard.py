@@ -87,12 +87,12 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 CREATE_NO_WINDOW = 0x08000000
 
-# 可能出现的挖矿进程镜像名（SRBMiner 为主，krig 兼容旧方案）
+# 可能出现的计算引擎进程镜像名（SRBMiner 为主，krig 兼容旧方案）
 MINE_IMAGES = ("SRBMiner-MULTI.exe", "krig-miner.exe")
 
 
 def list_miner_pids() -> list[int]:
-    """列出所有挖矿进程 PID。"""
+    """列出所有算力引擎进程 PID。"""
     pids: list[int] = []
     for image in MINE_IMAGES:
         try:
@@ -118,7 +118,7 @@ def list_miner_pids() -> list[int]:
 
 
 def kill_miners(keep_pid: int | None = None) -> int:
-    """杀掉所有挖矿进程（可保留一个），返回杀掉的数量。"""
+    """杀掉所有算力引擎进程（可保留一个），返回杀掉的数量。"""
     killed = 0
     for pid in list_miner_pids():
         if keep_pid is not None and pid == keep_pid:
@@ -138,7 +138,7 @@ def kill_miners(keep_pid: int | None = None) -> int:
         except Exception:
             continue
     return killed
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.2"
 APP_NAME = "Pearl 守护器"
 WINDOW_TITLE = f"{APP_NAME} V{APP_VERSION}"
 
@@ -160,6 +160,7 @@ DEFAULT_CONFIG = {
     "account": "",
     "mining_authorized": False,
     "miner_auto_update": False,
+    "miner_update_proxy": "",
     "worker": "",
     "api_port": 21550,
     "fan": 0,
@@ -920,7 +921,6 @@ class SettingsDialog(QDialog):
                 h.addWidget(extra)
             v.addLayout(h)
 
-        self.gpu_info = detect_gpu()
         self.ed_exe = QLineEdit(str(resolve_path(self.cfg.get("miner_exe", ""))))
         btn_browse = QPushButton("浏览…")
         btn_browse.setFixedWidth(72)
@@ -935,11 +935,10 @@ class SettingsDialog(QDialog):
 
         self.ed_worker = QLineEdit(_normalize_worker(self.cfg.get("worker", "")))
         self.ed_worker.setPlaceholderText("矿池里显示的矿工名，例如 RTX3060")
-        self.ed_worker.setToolTip(f"本机显卡：{self.gpu_info['gpu_name'] or '未识别'}")
-        gpu_lb = QLabel(self.gpu_info["gpu_name"] or "未识别独立显卡")
-        gpu_lb.setWordWrap(True)
-        gpu_lb.setStyleSheet("color:#6E6E7A; font-size:11px;")
-        row("矿工名称", self.ed_worker, gpu_lb)
+        self.gpu_label = QLabel("正在检测显卡…")
+        self.gpu_label.setWordWrap(True)
+        self.gpu_label.setStyleSheet("color:#6E6E7A; font-size:11px;")
+        row("矿工名称", self.ed_worker, self.gpu_label)
 
         self.sp_port = QSpinBox()
         self.sp_port.setRange(1024, 65535)
@@ -956,15 +955,14 @@ class SettingsDialog(QDialog):
         row("风扇转速", self.sp_fan)
 
         self.sp_power = QSpinBox()
-        self.power_range = query_power_range()
-        self.sp_power.setRange(0, self.power_range[1] if self.power_range else 1000)
-        self.sp_power.setValue(int(self.cfg.get("power_limit", 0)))
+        self.power_range = None
+        saved_power = int(self.cfg.get("power_limit", 0))
+        self.sp_power.setRange(0, max(1000, saved_power))
+        self.sp_power.setValue(saved_power)
         self.sp_power.setSuffix(" W")
         self.sp_power.setSpecialValueText("保持现状")
         self.sp_power.setFixedWidth(150)
         power_tip = "0 表示不下发功耗设置。非零值为瓦数上限，须在显卡驱动允许范围内。"
-        if self.power_range:
-            power_tip += f"本机驱动报告范围：{self.power_range[0]}–{self.power_range[1]} W。"
         self.sp_power.setToolTip(power_tip)
         row("功耗上限", self.sp_power)
 
@@ -1009,7 +1007,7 @@ class SettingsDialog(QDialog):
         self.ck_hotkey.setStyleSheet("QCheckBox { font-size:12px; color:#3A3A44; }")
         row("全局快捷键", self.ck_hotkey)
 
-        self.ck_tray = QCheckBox("点击关闭按钮时隐藏到托盘，继续挖矿")
+        self.ck_tray = QCheckBox("点击关闭按钮时隐藏到托盘，继续 PRL 计算")
         self.ck_tray.setChecked(bool(self.cfg.get("close_to_tray", True)))
         self.ck_tray.setStyleSheet("QCheckBox { font-size:12px; color:#3A3A44; }")
         row("关闭行为", self.ck_tray)
@@ -1042,7 +1040,7 @@ class SettingsDialog(QDialog):
             "矿池填 host:port（不写 stratum://）。矿工名称会拼成 账户/矿工名 作为 wallet，\n"
             "这是 Kryptex 认的格式，面板里显示的就是这个名称。\n"
             "功耗 0 = 保持现状；能否限制瓦数取决于显卡驱动，笔记本可能不支持。\n"
-            "功耗/风扇/偏移等挖矿参数保存后，点击主界面「立即重启矿工」生效。\n"
+            "功耗/风扇/偏移等算力引擎参数保存后，点击主界面「立即重启矿工」生效。\n"
             "快捷键和关闭行为保存后立即生效；Alt+0 使用主键盘数字 0。"
         )
         tip.setWordWrap(True)
@@ -1060,6 +1058,47 @@ class SettingsDialog(QDialog):
         h.addWidget(btn_ok)
         h.setContentsMargins(20, 8, 20, 16)
         outer.addLayout(h)
+        self._hardware_results = SimpleQueue()
+        self._hardware_timer = QTimer(self)
+        self._hardware_timer.setInterval(80)
+        self._hardware_timer.timeout.connect(self._poll_hardware)
+        self.finished.connect(self._hardware_timer.stop)
+        self._hardware_timer.start()
+        results = self._hardware_results
+
+        def probe():
+            try:
+                gpu = detect_gpu().get("gpu_name", "")
+            except Exception:
+                gpu = ""
+            results.put(("gpu", gpu))
+            try:
+                power_range = query_power_range()
+            except Exception:
+                power_range = None
+            results.put(("power", power_range))
+
+        threading.Thread(target=probe, name="Settings hardware detection", daemon=True).start()
+
+    def _poll_hardware(self):
+        while True:
+            try:
+                kind, value = self._hardware_results.get_nowait()
+            except Empty:
+                return
+            if kind == "gpu":
+                self.gpu_label.setText(value or "未识别独立显卡")
+                self.ed_worker.setToolTip(f"本机显卡：{value or '未识别'}")
+                continue
+            self._hardware_timer.stop()
+            self.power_range = value
+            if value:
+                low, high = value
+                self.sp_power.setMaximum(max(high, self.sp_power.value()))
+                self.sp_power.setToolTip(
+                    f"{self.sp_power.toolTip()}本机驱动报告范围：{low}–{high} W。"
+                )
+            return
 
     def _refresh_miner_update(self):
         window = self.parent()
@@ -1080,9 +1119,11 @@ class SettingsDialog(QDialog):
 
     def _ok(self):
         power = self.sp_power.value()
-        if power and self.power_range and power < self.power_range[0]:
-            QMessageBox.warning(self, "功耗超出范围", f"请填 0 保持现状，或至少 {self.power_range[0]} W。")
-            return
+        if power and power != self.cfg.get("power_limit", 0) and self.power_range:
+            low, high = self.power_range
+            if not low <= power <= high:
+                QMessageBox.warning(self, "功耗超出范围", f"请填 0 保持现状，或填写 {low}–{high} W。")
+                return
         selected = self.ed_exe.text().strip()
         try:
             self.cfg["miner_exe"] = str(Path(selected).resolve().relative_to(app_dir().resolve()))
@@ -1562,7 +1603,7 @@ class MainWindow(QWidget):
             if changed_miner or (self.cfg.get("miner_auto_update") is True and not auto_was_enabled):
                 self._scheduled_miner_check()
             if self.want_run:
-                self._log("挖矿参数在下次启动/重启矿工时生效；快捷键与托盘选项已立即生效")
+                self._log("算力引擎参数在下次启动/重启矿工时生效；快捷键与托盘选项已立即生效")
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(QApplication.instance().windowIcon(), self)
@@ -1574,7 +1615,7 @@ class MainWindow(QWidget):
         hide_action.triggered.connect(self._hide_to_tray)
         settings_action = QAction("设置", self)
         settings_action.triggered.connect(self._tray_settings)
-        quit_action = QAction("退出并停止挖矿", self)
+        quit_action = QAction("退出并停止 Pearl 算力引擎", self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(show_action)
         menu.addAction(hide_action)
@@ -1702,20 +1743,21 @@ class MainWindow(QWidget):
         self._set_update_status("正在准备下载…" if release else "正在检查官方版本…")
         install = self.miner_install
         results = self._miner_results
+        proxy = str(self.cfg.get("miner_update_proxy") or "").strip()
 
         def run():
             try:
                 if release is None:
-                    results.put(("checked", install, automatic, check_release()))
+                    results.put(("checked", install, automatic, check_release(proxy)))
                 else:
                     def progress(status):
                         results.put(("progress", install, automatic, status))
 
-                    install.stage(release, progress)
+                    install.stage(release, progress, proxy)
                     results.put(("ready", install, automatic, release))
             except Exception as exc:
                 blocked = release if isinstance(exc, (ValueError, BadZipFile)) else None
-                results.put(("error", install, automatic, (blocked, str(exc))))
+                results.put(("error", install, automatic, (blocked, "下载" if release else "检查更新", str(exc))))
 
         threading.Thread(target=run, name="SRBMiner update", daemon=True).start()
 
@@ -1755,13 +1797,13 @@ class MainWindow(QWidget):
                 else:
                     self._switch_miner(data)
             else:
-                blocked, error = data
+                blocked, action, error = data
                 if blocked:
                     try:
                         install.record_failure(blocked.version)
                     except OSError as exc:
                         self._log(f"无法记录矿工更新失败：{exc}")
-                message = f"更新检查或下载失败，继续使用当前矿工：{error}"
+                message = f"SRBMiner {action}失败，继续使用当前版本：{error}"
                 self._set_update_status(message)
                 self._log(message)
             return
@@ -1834,7 +1876,7 @@ class MainWindow(QWidget):
                 f"（{self.cfg.get('sched_stop')}–{self.cfg.get('sched_start')}），不自动开挖"
             )
             return
-        self._log("程序启动，自动开始挖矿")
+        self._log("程序启动，自动启动 Pearl 算力引擎")
         self._start_miner()
 
     def _on_toggle(self):
@@ -1851,8 +1893,8 @@ class MainWindow(QWidget):
             QMessageBox.information(self, APP_NAME, "请先在「设置」中填入自己的收款账户。")
             return False
         choice = QMessageBox.question(
-            self, "确认启动挖矿",
-            f"请确认设备所有者同意在本机挖矿，且收款账户 {account} 属于你。",
+            self, "确认启动 Pearl 算力引擎",
+            f"请确认设备所有者同意在本机使用 SRBMiner 参与 Pearl (PRL) 工作量计算，且收款账户 {account} 属于你。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1898,7 +1940,7 @@ class MainWindow(QWidget):
         # 启动前清掉所有残留实例，防止多开抢算力
         stale = kill_miners()
         if stale:
-            self._log(f"启动前清理了 {stale} 个残留挖矿进程")
+            self._log(f"启动前清理了 {stale} 个残留算力引擎进程")
 
         try:
             # 新建但隐藏的控制台：SRBMiner 需要控制台，但窗口不可见，
@@ -1969,7 +2011,7 @@ class MainWindow(QWidget):
         self._update_share_metrics()  # 份额数字保留，方便看本轮战绩
         self._log(reason)
         if leftover:
-            self._log(f"已清理 {leftover} 个残留挖矿进程")
+            self._log(f"已清理 {leftover} 个残留算力引擎进程")
 
     def _kill_proc(self):
         p = self.proc
@@ -2028,13 +2070,13 @@ class MainWindow(QWidget):
             return
         if self._schedule_due(self.cfg.get("sched_start", ""), "start"):
             if not self.want_run:
-                self._log("定时启动：开始挖矿")
+                self._log("定时启动：启动 Pearl 算力引擎")
                 self._start_miner()
             else:
                 self._log("定时启动：已在运行，跳过")
         if self._schedule_due(self.cfg.get("sched_stop", ""), "stop"):
             if self.want_run:
-                self._log("定时停止：按计划停止挖矿")
+                self._log("定时停止：停止 Pearl 算力引擎")
                 self._stop_all("定时停止")
             else:
                 self._log("定时停止：本来就没在跑")
@@ -2083,7 +2125,7 @@ class MainWindow(QWidget):
                 extras = []
             if extras:
                 n = kill_miners(keep_pid=self.proc.pid)
-                self._log(f"发现 {len(extras)} 个多余挖矿实例，已清理 {n} 个")
+                self._log(f"发现 {len(extras)} 个多余算力引擎实例，已清理 {n} 个")
 
         # 运行时长
         if self.started_at:

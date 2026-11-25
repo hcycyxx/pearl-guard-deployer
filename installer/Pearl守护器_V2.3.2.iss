@@ -3,6 +3,12 @@
 #define MyAppPublisher "Pearl"
 #define MyAppExeName "PearlGuard.exe"
 #define MyAppId "PearlGuard-2.2.0"
+#ifdef OnlineBuild
+#define OnlineMinerFolder "SRBMiner-Multi-3-9-0"
+#define OnlineMinerFile "SRBMiner-Multi-3-9-0-win64.zip"
+#define OnlineMinerURL "https://github.com/doktor83/SRBMiner-Multi/releases/download/3.9.0/" + OnlineMinerFile
+#define OnlineMinerHash "9c72c3f3c11b2d9790ba63add0da0bcc52d0d81e96029c0cc2734d1afecff678"
+#endif
 
 [Setup]
 AppId={#MyAppId}
@@ -12,7 +18,12 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\PearlGuard
 DefaultGroupName=Pearl 守护器
 OutputDir={#GetEnv("PEARL_OUTPUT_DIR")}
+#ifdef OnlineBuild
+OutputBaseFilename=PearlGuard-V{#MyAppVersion}-Online-Setup
+ArchiveExtraction=full
+#else
 OutputBaseFilename=PearlGuard-V{#MyAppVersion}-Setup
+#endif
 SetupIconFile={#GetEnv("PEARL_PROJECT_ROOT")}\assets\pearl.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -42,7 +53,13 @@ Source: "{#GetEnv('PEARL_PACKAGE_ROOT')}\gpu_probe.ps1"; DestDir: "{app}"; Flags
 Source: "{#GetEnv('PEARL_PACKAGE_ROOT')}\gpu_probe.ps1"; Flags: dontcopy
 Source: "{#GetEnv('PEARL_PACKAGE_ROOT')}\config.template.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#GetEnv('PEARL_PACKAGE_ROOT')}\*.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+#ifdef OnlineBuild
+Source: "{tmp}\{#OnlineMinerFolder}\SRBMiner-MULTI.exe"; DestDir: "{app}\miner"; Flags: external ignoreversion onlyifdoesntexist; Check: NeedOnlineMiner
+Source: "{tmp}\{#OnlineMinerFolder}\ReadMe.txt"; DestDir: "{app}\miner"; Flags: external ignoreversion onlyifdoesntexist; Check: NeedOnlineMiner
+Source: "{tmp}\{#OnlineMinerFolder}\WinRing0x64.sys"; DestDir: "{app}\miner"; Flags: external ignoreversion onlyifdoesntexist; Check: NeedOnlineMiner
+#else
 Source: "{#GetEnv('PEARL_PACKAGE_ROOT')}\miner\*"; DestDir: "{app}\miner"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
+#endif
 
 [Dirs]
 Name: "{app}\miner\logs"
@@ -64,6 +81,86 @@ var
   DetectedWorker: String;
   DetectedGpu: String;
   ExistingConfig: Boolean;
+
+#ifdef OnlineBuild
+  OnlineProgress: TOutputProgressWizardPage;
+  FetchOnlineMiner: Boolean;
+
+function NeedOnlineMiner(): Boolean;
+begin
+  Result := FetchOnlineMiner;
+end;
+
+function OnlineDownloadProgress(const Url, FileName: String;
+  const Progress, ProgressMax: Int64): Boolean;
+begin
+  if not WizardSilent then
+    OnlineProgress.SetProgress(Progress, ProgressMax);
+  Result := True;
+end;
+
+function DownloadWithCurl(ArchivePath, Extra: String): Boolean;
+var
+  Curl, Params: String;
+  ExitCode: Integer;
+begin
+  Curl := ExpandConstant('{sys}\curl.exe');
+  Params := '--disable --fail --silent --show-error --location --proto "=https" ' +
+    '--proto-redir "=https" --connect-timeout 12 --speed-time 30 --speed-limit 1 ' +
+    '--max-time 600 --output "' + ArchivePath + '" ' + Extra + ' "{#OnlineMinerURL}"';
+  Result := FileExists(Curl) and
+    Exec(Curl, Params, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) and
+    (ExitCode = 0);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ArchivePath: String;
+  Downloaded: Boolean;
+begin
+  Result := '';
+  FetchOnlineMiner := not FileExists(ExpandConstant('{app}\miner\SRBMiner-MULTI.exe'));
+  if not FetchOnlineMiner then Exit;
+  ArchivePath := ExpandConstant('{tmp}\{#OnlineMinerFile}');
+  if not WizardSilent then
+  begin
+    OnlineProgress.SetText('正在获取 SRBMiner 3.9.0', '来源：SRBMiner 官方 GitHub Release');
+    OnlineProgress.SetProgress(0, 0);
+    OnlineProgress.Show;
+  end;
+  try
+    try
+      Downloaded := False;
+      if GetEnv('HTTPS_PROXY') <> '' then
+        Downloaded := DownloadWithCurl(ArchivePath, '');
+      if not Downloaded then
+      begin
+        try
+          DownloadTemporaryFile('{#OnlineMinerURL}', '{#OnlineMinerFile}',
+            '{#OnlineMinerHash}', @OnlineDownloadProgress);
+          Downloaded := True;
+        except
+          Log(GetExceptionMessage);
+        end;
+      end;
+      if not Downloaded then
+        Downloaded := DownloadWithCurl(ArchivePath, '--noproxy "*"');
+      if not Downloaded then
+        RaiseException('无法连接 SRBMiner 官方发布源，请检查网络后重试。');
+      if CompareText(GetSHA256OfFile(ArchivePath), '{#OnlineMinerHash}') <> 0 then
+        RaiseException('SRBMiner 安装包 SHA256 校验失败。');
+      if not WizardSilent then
+        OnlineProgress.SetText('SHA256 校验通过，正在解压', '');
+      ExtractArchive(ArchivePath, ExpandConstant('{tmp}'), '', True, nil);
+    except
+      Result := GetExceptionMessage;
+    end;
+  finally
+    if not WizardSilent then
+      OnlineProgress.Hide;
+  end;
+end;
+#endif
 
 function RunGpuProbe(ProbePath, ResultPath: String): Boolean;
 var
@@ -136,6 +233,10 @@ end;
 
 procedure InitializeWizard();
 begin
+#ifdef OnlineBuild
+  OnlineProgress := CreateOutputProgressPage('获取 Pearl 算力引擎',
+    '从 SRBMiner 官方下载并校验 Windows 组件。');
+#endif
   ProbeResultPage := CreateOutputMsgPage(wpSelectDir,
     '显卡检测', '安装器会先检测本机显卡，并自动填入矿工名。',
     '已识别显卡：' + DetectedGpu + #13#10#13#10 +

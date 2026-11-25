@@ -1,7 +1,9 @@
 {
   "miner_exe": "miner\\SRBMiner-MULTI.exe",
   "pool": "prl.kryptex.network:8048",
-  "account": "krxX72P2ZE",
+  "account": "",
+  "mining_authorized": false,
+  "miner_auto_update": false,
   "worker": "{WORKER}",
   "api_port": 21550,
   "fan": 0,

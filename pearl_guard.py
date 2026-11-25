@@ -19,6 +19,7 @@ import json
 import ctypes
 from ctypes import wintypes
 import os
+from queue import Empty, SimpleQueue
 import re
 import subprocess
 import sys
@@ -29,6 +30,9 @@ import urllib.request
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
+from zipfile import BadZipFile
+
+from miner_update import CHECK_INTERVAL_MS, MinerInstall, Release, binary_version, check_release, version_key
 from gpu_info import detect, worker_from_model
 
 from PyQt6.QtCore import (
@@ -134,7 +138,7 @@ def kill_miners(keep_pid: int | None = None) -> int:
         except Exception:
             continue
     return killed
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 APP_NAME = "Pearl 守护器"
 WINDOW_TITLE = f"{APP_NAME} V{APP_VERSION}"
 
@@ -153,7 +157,9 @@ CONFIG_FILE = app_dir() / "supervisor.json"
 DEFAULT_CONFIG = {
     "miner_exe": "miner\\SRBMiner-MULTI.exe",
     "pool": "prl.kryptex.network:8048",
-    "account": "krxX72P2ZE",
+    "account": "",
+    "mining_authorized": False,
+    "miner_auto_update": False,
     "worker": "",
     "api_port": 21550,
     "fan": 0,
@@ -193,9 +199,9 @@ def detect_gpu() -> dict:
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     try:
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
-            cfg.update({k: v for k, v in data.items() if k in DEFAULT_CONFIG})
+            cfg.update(data)
             # 旧配置里的 12 是误判较多的老阈值，迁移到 60
             try:
                 if int(cfg.get("zero_hash_limit", 60)) == 12:
@@ -207,6 +213,10 @@ def load_config() -> dict:
                 base, _, wk = str(data["wallet"]).partition("/")
                 cfg["account"] = base
                 cfg["worker"] = wk or cfg.get("worker", "")
+            if "mining_authorized" not in data:
+                # 旧版已改用自有账户的安装继续沿用原来的自动启动。
+                account = str(cfg["account"] or "").partition("/")[0].strip()
+                cfg["mining_authorized"] = bool(account and account.casefold() != "krxx72p2ze")
     except Exception:
         pass
     if not str(cfg.get("worker", "")).strip():
@@ -219,9 +229,9 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     try:
-        CONFIG_FILE.write_text(
-            json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        pending = CONFIG_FILE.with_suffix(".json.tmp")
+        pending.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        pending.replace(CONFIG_FILE)
     except OSError as exc:
         raise OSError(f"无法保存设置：{exc}") from exc
 
@@ -1004,6 +1014,30 @@ class SettingsDialog(QDialog):
         self.ck_tray.setStyleSheet("QCheckBox { font-size:12px; color:#3A3A44; }")
         row("关闭行为", self.ck_tray)
 
+        self.lb_miner_versions = QLabel()
+        row("矿工更新", self.lb_miner_versions)
+        self.ck_miner_update = QCheckBox("自动更新 SRBMiner")
+        self.ck_miner_update.setChecked(self.cfg.get("miner_auto_update") is True)
+        row("", self.ck_miner_update)
+        self.lb_update_status = QLabel()
+        self.lb_update_status.setWordWrap(True)
+        row("", self.lb_update_status)
+
+        actions = QWidget()
+        action_layout = QHBoxLayout(actions)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_check_miner = QPushButton("立即检查更新")
+        self.btn_update_miner = QPushButton("立即更新")
+        action_layout.addWidget(self.btn_check_miner)
+        action_layout.addWidget(self.btn_update_miner)
+        action_layout.addStretch(1)
+        row("", actions)
+        if parent is not None:
+            self.btn_check_miner.clicked.connect(parent._check_miner_update)
+            self.btn_update_miner.clicked.connect(parent._download_miner_update)
+            parent.miner_update_changed.connect(self._refresh_miner_update)
+            self._refresh_miner_update()
+
         tip = QLabel(
             "矿池填 host:port（不写 stratum://）。矿工名称会拼成 账户/矿工名 作为 wallet，\n"
             "这是 Kryptex 认的格式，面板里显示的就是这个名称。\n"
@@ -1026,6 +1060,15 @@ class SettingsDialog(QDialog):
         h.addWidget(btn_ok)
         h.setContentsMargins(20, 8, 20, 16)
         outer.addLayout(h)
+
+    def _refresh_miner_update(self):
+        window = self.parent()
+        current = window.miner_version or "未知"
+        latest = window.miner_release.version if window.miner_release else "未检查"
+        self.lb_miner_versions.setText(f"当前 {current}  ·  最新 {latest}")
+        self.lb_update_status.setText(window.miner_update_status)
+        self.btn_check_miner.setEnabled(not window.miner_update_busy)
+        self.btn_update_miner.setEnabled(not window.miner_update_busy and window._miner_update_available())
 
     def _browse(self):
         start = str(Path(self.ed_exe.text()).parent) if self.ed_exe.text() else ""
@@ -1054,6 +1097,7 @@ class SettingsDialog(QDialog):
         self.cfg["power_limit"] = int(self.sp_power.value())
         self.cfg["global_hotkey"] = bool(self.ck_hotkey.isChecked())
         self.cfg["close_to_tray"] = bool(self.ck_tray.isChecked())
+        self.cfg["miner_auto_update"] = self.ck_miner_update.isChecked()
         self.cfg["core_offset"] = int(self.sp_core.value())
         self.cfg["mem_offset"] = int(self.sp_mem.value())
         self.cfg["sched_enable"] = bool(self.ck_sched.isChecked())
@@ -1066,11 +1110,23 @@ class SettingsDialog(QDialog):
 # 主窗口
 # ══════════════════════════════════════════════════════════════════════
 class MainWindow(QWidget):
+    miner_update_changed = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.cfg = load_config()
         self._quitting = False
         self._hidden_dialogs = []
+        self._background_hidden = False
+        self._temporary_hotkey = False
+        self.miner_install = self._miner_install()
+        self.running_install = None
+        self.miner_version = binary_version(self.miner_install.executable)
+        self.miner_release: Release | None = None
+        self.miner_update_busy = False
+        self.miner_update_status = "等待检查"
+        self._miner_results = SimpleQueue()
+        self._trial_write_failed = False
 
         self.proc: subprocess.Popen | None = None
         self.running = False
@@ -1134,6 +1190,8 @@ class MainWindow(QWidget):
             except (OSError, ValueError):
                 self.cfg["miner_exe"] = found
             save_config(self.cfg)
+            self.miner_install = self._miner_install()
+            self.miner_version = binary_version(self.miner_install.executable)
             self._log(f"已自动找到矿工：{found}")
             self._refresh_hourly()
         elif not self._exe_ok():
@@ -1142,6 +1200,11 @@ class MainWindow(QWidget):
 
         # 打开程序即自动开挖
         QTimer.singleShot(800, self._auto_boot)
+        QTimer.singleShot(1000, self._scheduled_miner_check)
+        self.update_timer = QTimer(self)
+        self.update_timer.setInterval(CHECK_INTERVAL_MS)
+        self.update_timer.timeout.connect(self._scheduled_miner_check)
+        self.update_timer.start()
 
     # ── 布局 ────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -1322,7 +1385,14 @@ class MainWindow(QWidget):
         self.btn_settings.clicked.connect(self._open_settings)
         bar.addWidget(self.btn_settings)
 
-        for b in (self.btn_restart, self.btn_settings):
+        self.btn_background = QPushButton("后台隐藏")
+        self.btn_background.setFixedHeight(40)
+        self.btn_background.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_background.setToolTip("隐藏窗口和托盘图标，按 Alt+0 恢复")
+        self.btn_background.clicked.connect(self._hide_in_background)
+        bar.insertWidget(bar.count() - 1, self.btn_background)
+
+        for b in (self.btn_restart, self.btn_settings, self.btn_background):
             b.setStyleSheet(
                 """
                 QPushButton {
@@ -1410,8 +1480,7 @@ class MainWindow(QWidget):
 
     # ── 配置与命令 ──────────────────────────────────────────────────
     def _exe_ok(self) -> bool:
-        p = self.cfg.get("miner_exe", "")
-        return bool(p) and resolve_path(p).is_file()
+        return self.miner_install.executable.is_file()
 
     def _wallet(self) -> str:
         """账户/矿工名，Kryptex 用斜杠解析矿工名。"""
@@ -1425,7 +1494,7 @@ class MainWindow(QWidget):
     def _build_cmd(self) -> list[str]:
         cfg = self.cfg
         args = [
-            str(resolve_path(cfg["miner_exe"])),
+            str(self.miner_install.executable),
             "--algorithm-gpu",
             "pearlhash",
             "--pool",
@@ -1470,16 +1539,28 @@ class MainWindow(QWidget):
 
     def _open_settings(self):
         dlg = SettingsDialog(self.cfg, self)
-        if dlg.exec():
+        accepted = dlg.exec()
+        dlg.deleteLater()
+        if accepted:
             try:
                 save_config(dlg.cfg)
             except OSError as exc:
                 QMessageBox.warning(self, "设置未保存", str(exc))
                 return
+            auto_was_enabled = self.cfg.get("miner_auto_update") is True
             self.cfg = dlg.cfg
             self._log("设置已保存")
+            base = resolve_path(self.cfg["miner_exe"]).resolve()
+            changed_miner = base != self.miner_install.base
+            if changed_miner:
+                self.miner_install = self._miner_install()
+                self.miner_version = binary_version(self.miner_install.executable)
+                self.miner_release = None
+                self._set_update_status("矿工路径已修改，等待检查")
             self._apply_cfg()
             self._apply_hotkey()
+            if changed_miner or (self.cfg.get("miner_auto_update") is True and not auto_was_enabled):
+                self._scheduled_miner_check()
             if self.want_run:
                 self._log("挖矿参数在下次启动/重启矿工时生效；快捷键与托盘选项已立即生效")
 
@@ -1522,7 +1603,22 @@ class MainWindow(QWidget):
             dialog.hide()
         self.hide()
 
+    def _hide_in_background(self):
+        if not self.hotkey.set_enabled(True):
+            QMessageBox.warning(self, "无法后台隐藏", "Alt+0 注册失败，请关闭占用该快捷键的程序后重试。")
+            return
+        self._temporary_hotkey = not self.cfg.get("global_hotkey", True)
+        self._background_hidden = True
+        self.hide()
+        self.tray.hide()
+
     def _show_from_tray(self):
+        if self._background_hidden:
+            self._background_hidden = False
+            self.tray.show()
+            if self._temporary_hotkey:
+                self._temporary_hotkey = False
+                self.hotkey.set_enabled(False)
         if self.isMinimized():
             self.showNormal()
         else:
@@ -1536,7 +1632,7 @@ class MainWindow(QWidget):
             dialog.activateWindow()
 
     def _toggle_tray(self):
-        if self.isVisible() and not self.isMinimized():
+        if not self._background_hidden and self.isVisible() and not self.isMinimized():
             self._hide_to_tray()
         else:
             self._show_from_tray()
@@ -1574,7 +1670,140 @@ class MainWindow(QWidget):
         d = resolve_path(exe).parent
         self.log_path = d / "srb-supervisor.log"
 
+    def _miner_install(self) -> MinerInstall:
+        return MinerInstall(app_dir() / "miner-updates", resolve_path(self.cfg["miner_exe"]))
+
+    def _set_update_status(self, status: str):
+        self.miner_update_status = status
+        self.miner_update_changed.emit()
+
+    def _miner_update_available(self) -> bool:
+        release = self.miner_release
+        return bool(
+            self.miner_version and release and release.sha256
+            and version_key(release.version) > version_key(self.miner_version)
+            and not self.miner_install.blocked(release.version)
+        )
+
+    def _scheduled_miner_check(self):
+        self._start_miner_update_job(automatic=self.cfg.get("miner_auto_update") is True)
+
+    def _check_miner_update(self):
+        self._start_miner_update_job()
+
+    def _download_miner_update(self):
+        if self._miner_update_available():
+            self._start_miner_update_job(release=self.miner_release)
+
+    def _start_miner_update_job(self, release: Release | None = None, automatic: bool = False):
+        if self.miner_update_busy or self._quitting:
+            return
+        self.miner_update_busy = True
+        self._set_update_status("正在准备下载…" if release else "正在检查官方版本…")
+        install = self.miner_install
+        results = self._miner_results
+
+        def run():
+            try:
+                if release is None:
+                    results.put(("checked", install, automatic, check_release()))
+                else:
+                    def progress(status):
+                        results.put(("progress", install, automatic, status))
+
+                    install.stage(release, progress)
+                    results.put(("ready", install, automatic, release))
+            except Exception as exc:
+                blocked = release if isinstance(exc, (ValueError, BadZipFile)) else None
+                results.put(("error", install, automatic, (blocked, str(exc))))
+
+        threading.Thread(target=run, name="SRBMiner update", daemon=True).start()
+
+    def _poll_miner_update(self):
+        status = None
+        while True:
+            try:
+                event, install, automatic, data = self._miner_results.get_nowait()
+            except Empty:
+                break
+            if event == "progress":
+                if install is self.miner_install:
+                    status = data
+                continue
+            self.miner_update_busy = False
+            if install is not self.miner_install:
+                self._set_update_status("矿工路径已修改，请重新检查")
+                return
+            if event == "checked":
+                self.miner_version = binary_version(install.executable)
+                self.miner_release = release = data
+                if self._miner_update_available():
+                    self._set_update_status(f"可更新至 SRBMiner {release.version}")
+                    if automatic and self.cfg.get("miner_auto_update") is True:
+                        self._start_miner_update_job(release, automatic=True)
+                elif not self.miner_version:
+                    self._set_update_status("无法识别当前 SRBMiner 版本")
+                elif version_key(release.version) <= version_key(self.miner_version):
+                    self._set_update_status("当前矿工已是最新或更高版本")
+                elif install.blocked(release.version):
+                    self._set_update_status(f"版本 {release.version} 曾更新失败，等待新版本")
+                else:
+                    self._set_update_status("官方 Windows x64 ZIP 无可验证的 SHA256")
+            elif event == "ready":
+                if automatic and self.cfg.get("miner_auto_update") is not True:
+                    self._set_update_status("自动更新已关闭，可以手动更新")
+                else:
+                    self._switch_miner(data)
+            else:
+                blocked, error = data
+                if blocked:
+                    try:
+                        install.record_failure(blocked.version)
+                    except OSError as exc:
+                        self._log(f"无法记录矿工更新失败：{exc}")
+                message = f"更新检查或下载失败，继续使用当前矿工：{error}"
+                self._set_update_status(message)
+                self._log(message)
+            return
+        if status is not None:
+            self._set_update_status(status)
+
+    def _switch_miner(self, release: Release):
+        if self.want_run and self.running_install not in (None, self.miner_install):
+            self._set_update_status("请先重启矿工以应用已修改的矿工路径")
+            return
+        try:
+            self.miner_install.activate(release.version)
+        except OSError as exc:
+            self._set_update_status(f"无法切换矿工，继续使用当前版本：{exc}")
+            return
+        self._trial_write_failed = False
+        self.miner_version = release.version
+        message = f"已切换到 SRBMiner {release.version}，等待运行验证"
+        self._set_update_status(message)
+        self._log(message)
+        if self.want_run:
+            self._kill_proc()
+            self.pending_restart_at = None
+            self._start_miner()
+
+    def _miner_fault(self, reason: str):
+        install = self.running_install
+        if install and install.trial:
+            warning = ""
+            try:
+                install.rollback()
+            except OSError as exc:
+                warning = f"；无法保存回滚状态：{exc}"
+            if install is self.miner_install:
+                self.miner_version = binary_version(install.executable)
+                self._set_update_status(f"新版异常，已回滚至 {self.miner_version or '旧版'}{warning}")
+            self._log(f"已回滚矿工：{reason}{warning}")
+        self._restart(reason)
+
     # ── 启动/停止 ───────────────────────────────────────────────────
+    def _mining_allowed(self) -> bool:
+        return self.cfg.get("mining_authorized") is True and bool(self._wallet().partition("/")[0].strip())
     def _in_run_window(self) -> bool:
         """按定时设置判断当前是否属于允许运行的时间段。"""
         if not self.cfg.get("sched_enable"):
@@ -1596,6 +1825,9 @@ class MainWindow(QWidget):
         """程序启动后自动开挖，但必须尊重定时时段。"""
         if self.want_run or not self._exe_ok():
             return
+        if not self._mining_allowed():
+            self._log("请在设置中填写自己的收款账户，再点击「启动守护」确认设备授权")
+            return
         if not self._in_run_window():
             self._log(
                 f"程序已启动，但当前在定时停止时段"
@@ -1608,15 +1840,44 @@ class MainWindow(QWidget):
     def _on_toggle(self):
         if self.want_run:
             self._stop_all("手动停止")
-        else:
+        elif self._mining_allowed() or self._confirm_mining():
             self._start_miner()
+        else:
+            self.btn_run.setChecked(False)
+
+    def _confirm_mining(self) -> bool:
+        account = self._wallet().partition("/")[0].strip()
+        if not account:
+            QMessageBox.information(self, APP_NAME, "请先在「设置」中填入自己的收款账户。")
+            return False
+        choice = QMessageBox.question(
+            self, "确认启动挖矿",
+            f"请确认设备所有者同意在本机挖矿，且收款账户 {account} 属于你。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return False
+        authorized = {**self.cfg, "mining_authorized": True}
+        try:
+            save_config(authorized)
+        except OSError as exc:
+            QMessageBox.warning(self, "设置未保存", str(exc))
+            return False
+        self.cfg = authorized
+        return True
 
     def _start_miner(self):
+        if not self._mining_allowed():
+            self.want_run = False
+            self.btn_run.setChecked(False)
+            return
         if not self._exe_ok():
             self._log("未配置有效的矿工程序，请先点「设置」")
             self.btn_run.setChecked(False)
             return
 
+        self.running_install = self.miner_install
         self._log_path_from_exe(self.cfg["miner_exe"])
         # 本次运行独立日志：份额统计从这里面数，重启就重新计数
         try:
@@ -1630,7 +1891,9 @@ class MainWindow(QWidget):
         self._log_pos = 0
         self._reset_share_metrics()
         cmd = self._build_cmd()
-        cwd = str(resolve_path(self.cfg["miner_exe"]).parent)
+        # Relative paths in existing extra arguments still resolve from the configured miner directory.
+        work_dir = self.miner_install.base.parent
+        cwd = str(work_dir if work_dir.is_dir() else self.miner_install.executable.parent)
 
         # 启动前清掉所有残留实例，防止多开抢算力
         stale = kill_miners()
@@ -1655,6 +1918,9 @@ class MainWindow(QWidget):
         except Exception as e:  # noqa: BLE001
             self._log(f"启动失败：{e}")
             self.btn_run.setChecked(False)
+            if self.miner_install.trial:
+                self.want_run = True
+                self._miner_fault("新版矿工启动失败")
             return
 
         extra = kill_miners(keep_pid=self.proc.pid)
@@ -1665,6 +1931,7 @@ class MainWindow(QWidget):
         self.running = True
         self.started_at = time.time()
         self.grace_until = time.time() + 45  # 内核编译期，不算假死
+        self.pool_wait = False
         self.api_fails = 0
         self.zero_streak = 0
         self.last_mining_time = None
@@ -1682,12 +1949,13 @@ class MainWindow(QWidget):
         self.poller.start()
 
     def _stop_all(self, reason: str):
+        was_running = self.want_run or self.proc is not None
         self.want_run = False
         self.running = False
         self.pending_restart_at = None
         self._kill_proc()
         # 不管是不是本程序拉起的，一律清干净，避免多开继续吃算力
-        leftover = kill_miners()
+        leftover = kill_miners() if was_running else 0
         self.btn_run.setChecked(False)
         self.btn_run.setText("启动守护")
         self._set_status("已停止", "#8A8A95")
@@ -1756,7 +2024,7 @@ class MainWindow(QWidget):
         return True
 
     def _check_schedule(self):
-        if not self.cfg.get("sched_enable"):
+        if not self.cfg.get("sched_enable") or not self._mining_allowed():
             return
         if self._schedule_due(self.cfg.get("sched_start", ""), "start"):
             if not self.want_run:
@@ -1784,6 +2052,7 @@ class MainWindow(QWidget):
     # ── 每秒巡检 ────────────────────────────────────────────────────
     def _tick(self):
         self._check_schedule()
+        self._poll_miner_update()
         if self.pending_restart_at and time.time() >= self.pending_restart_at:
             self.pending_restart_at = None
             if self.want_run:
@@ -1803,7 +2072,7 @@ class MainWindow(QWidget):
             code = self.proc.returncode
             self.proc = None
             self._log(f"矿工进程已退出，退出码 {code}")
-            self._restart(f"进程退出 {code}")
+            self._miner_fault(f"进程退出 {code}")
             return
 
         # 只允许一个实例：多余的直接杀掉，避免多开抢算力
@@ -1828,7 +2097,7 @@ class MainWindow(QWidget):
         if not in_grace and self.api_fails >= int(self.cfg.get("api_fail_limit", 3)):
             self._log(f"统计接口连续 {self.api_fails} 次无响应，判定假死")
             self.api_fails = 0
-            self._restart("统计接口无响应")
+            self._miner_fault("统计接口无响应")
             return
 
         # 算力长时间为 0 → 判为假死；但如果只是矿池断线，重启没用，等它自己重连
@@ -1837,7 +2106,7 @@ class MainWindow(QWidget):
         ):
             self._log(f"算力连续 {self.zero_streak} 次为 0，判定假死")
             self.zero_streak = 0
-            self._restart("算力为 0")
+            self._miner_fault("算力为 0")
             return
 
         # 心跳不前进 → 进程还在但主循环卡死（就是你按回车才恢复的那种）
@@ -1911,6 +2180,19 @@ class MainWindow(QWidget):
                     self.zero_streak = 0
                 else:
                     self.zero_streak = self.zero_streak + 1 if h1 <= 0 else 0
+                install = self.running_install
+                if (
+                    install and install.trial and not self._trial_write_failed and self.proc
+                    and self.started_at and h1 > 0 and time.time() - self.started_at >= 120
+                ):
+                    try:
+                        install.confirm()
+                    except OSError as exc:
+                        self._trial_write_failed = True
+                        self._log(f"无法保存新版矿工验证结果：{exc}")
+                    else:
+                        if install is self.miner_install:
+                            self._set_update_status(f"SRBMiner {self.miner_version} 已通过运行验证")
             else:
                 self._set_status("外部实例运行中", "#0A84FF")
         except Exception:

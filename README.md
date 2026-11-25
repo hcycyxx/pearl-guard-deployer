@@ -1,99 +1,58 @@
-# Pearl 守护器 V2.2.0
+# Pearl 守护器 V2.3.0
 
-珍珠币挖矿一键部署。实现监测算力，控制风扇，限制功率。自动检测是否提交成功。挖矿意外终止会随时拉起，保持挖矿在线。自动更新最新的挖矿程序。
-Windows 一键部署版。安装包内含 Pearl 守护器、SRBMiner 3.8.0、显卡型号探测、默认配置和快捷方式，目标电脑无需安装 Python。
+Windows 珍珠币守护器。监控算力和有效份额，支持风扇和功耗设置，矿工异常时可自动恢复。V2.3.0 加入 SRBMiner 自动更新与后台隐藏。
 
-## 首次挖矿：邀请码与自己的账户
+## 获取 V2.3.0
 
-首次使用 Kryptex，请先通过邀请码 **EA599473** 注册：
+- [V2.3.0 源码发布](https://github.com/hcycyxx/pearl-guard-deployer/releases/tag/v2.3.0)。请从 SRBMiner 官方下载 3.8.0 Windows ZIP，再按下方步骤本地构建安装包。
+- [V2.2.0 历史版本](https://github.com/hcycyxx/pearl-guard-deployer/releases/tag/v2.2.0)
 
-- 注册：https://www.kryptex.com/?ref=EA599473
-- 矿池：https://pool.kryptex.com/?ref=EA599473
+## 安装与首次启动
 
-> **重要：安装包默认仍使用作者账户 `krxX72P2ZE`。** 其他使用者安装后请立即点击“停止守护”，打开“设置”，把“收款账户”改成自己在 Kryptex 的 `krx...` 账户，然后重新启动矿工。不要把自己的挖矿收入长期留在默认账户。
+1. 确认设备所有者同意在这台电脑挖矿。首次使用 Kryptex 时，请通过邀请码 **EA599473** 注册并取得自己的 `krx...` 收款账户。 [Kryptex 注册](https://www.kryptex.com/?ref=EA599473) · [矿池推荐入口](https://pool.kryptex.com/?ref=EA599473) · [官方推荐说明](https://www.kryptex.com/referral/)
+2. 本地构建并运行安装器。向导会识别 NVIDIA 或 AMD 显卡并填入矿工名称，名称可以修改。安装时可选桌面快捷方式和开机自启动。
+3. 开启守护器，在「设置」填入自己的收款账户并保存。Kryptex Pearl 默认使用 SSL 矿池 `prl.kryptex.network:8048`，保留该地址即可。推荐链接用于网页注册，矿池设置填 `host:port`。 [Kryptex 官方矿池地址](https://pool.kryptex.com/articles/pearl-mining-pools-en)
+4. 点击「启动守护」，确认设备授权和自己的账户后开始挖矿。安装器默认不填写风扇、功耗或超频数值。
+
+从 V2.2.0 升级时，先退出正在运行的旧版守护器，再安装到原目录。安装器保留 `supervisor.json`、历史日志和已有矿工文件。若要维持停止状态，请保持安装后的启动选项关闭。旧版仍使用随包默认账户时，请在首次启动挖矿前核对并确认账户。
+
+## SRBMiner 更新
+
+守护器启动后检查正式版本，此后每 6 小时检查一次。打开「设置 → 矿工更新」查看当前/最新版本和进度，可手动检查和更新。设备所有者可以勾选「自动更新 SRBMiner」并保存，之后可自动安装通过校验的正式版。
+
+下载和解压在后台完成，旧矿工继续运行。更新器依据官方发布记录中的 Windows x64 ZIP SHA256 验证归档。网络错误或校验失败时继续使用当前版本。切换后会恢复原来的运行状态，启动失败或验证期间出现守护异常时回滚。回滚后的失败版本会被跳过。
+
+## 后台隐藏
+
+点击主界面「后台隐藏」，窗口会从桌面和任务栏消失，托盘图标也会隐藏。监控、矿工更新、定时启停和异常重启继续运行。按 **Alt+0**（主键盘数字 0）恢复窗口和托盘。若快捷键被占用，守护器会提示并保持界面可见。普通最小化和关闭到托盘沿用原有操作。
 
 ## AI 一键部署
 
-将下面这段直接交给 Codex 或 WorkBuddy：
+把下面这段交给 Codex 或 WorkBuddy。
 
 ```text
-请读取此 GitHub 仓库的 README 和 Release，为当前 Windows 电脑部署 Pearl 守护器 V2.2.0。先确认有受支持的 NVIDIA/AMD 显卡并取得电脑所有者同意；首次使用 Kryptex 时，按邀请码 EA599473 引导我本人注册并取得自己的 krx... 收款账户。安装时使用静默模式避免程序首次启动，然后把安装目录 supervisor.json 中的 account 改成我的账户并回读确认；只有账户核对一致后才启动 Pearl 守护器，最后检查 SRBMiner-MULTI.exe 和矿池连接。任何一步失败就停止并报告，不要使用默认的作者账户继续挖矿。
+请依据本仓库 README 为当前 Windows 电脑部署 Pearl 守护器 V2.3.0。
+1. 先确认设备所有者授权及显卡支持。首次使用 Kryptex 时，引导我本人通过邀请码 EA599473 注册，核对我自己的 krx... 收款账户。
+2. 从 V2.3.0 源码和官方 SRBMiner 3.8.0 Windows ZIP 本地构建 PearlGuard-V2.3.0-Setup.exe。用 Get-FileHash -Algorithm SHA256 对照构建输出的 .sha256 文件，再用 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART 静默安装。覆盖升级沿用原安装目录，先经我确认退出正在运行的旧守护器。
+3. 检查安装目录的 supervisor.json。覆盖升级保留原有配置、账户和日志。首次安装只在取得我的授权、核对收款账户后，将 account 写成我提供的账户，将 mining_authorized 设为 true，并回读确认。默认 SSL 矿池沿用 prl.kryptex.network:8048。
+4. 只有我明确要求启动时才启动 PearlGuard.exe。启动后核对矿工进程和矿池连接。如果授权、账户或完整性校验未通过，停止部署并报告。
 ```
 
-## 下载
+## 目录与构建
 
-- [PearlGuard-V2.2.0-Setup.exe](dist/PearlGuard-V2.2.0-Setup.exe)
-- SHA256：`DB9D23553F082478B0B8DCFDBE87F92B913C4FCCF509A739AC8C77ABD0C2DC4E`
+- `pearl_guard.py` 守护器及界面。`miner_update.py` 官方发布检查、下载验证和版本切换。
+- `gpu_info.py`、`installer/gpu_probe.ps1` 显卡和矿工名探测。
+- `installer/Pearl守护器_V2.3.0.iss` 安装脚本。`使用说明_V2.3.0.txt` 随包说明。
+- `check_v2_3.py` 使用模拟矿工的回归检查。
 
-## 功能
-
-- NVIDIA / AMD 显卡型号自动探测，矿工名自动填为 `RTX3060`、`RX6700XT` 这类短名称。
-- 保留矿池 `prl.kryptex.network:8048` 和账户 `krxX72P2ZE`。
-- 风扇、功耗、核心偏移、显存偏移默认全部不设置。
-- 默认安装到当前用户目录，不需要管理员权限。
-- 首次安装创建桌面和开始菜单快捷方式，可选开机启动。
-- 覆盖升级保留 `supervisor.json`，历史日志不随包分发。
-- 主界面按屏幕可用区域缩放，小屏幕可纵向滚动；设置页始终支持滚动。
-- 相对矿工路径 `miner\SRBMiner-MULTI.exe` 随安装目录定位，不依赖 `C:\Mining`。
-
-## 安装
-
-1. 首次使用 Kryptex 时，通过邀请码 `EA599473` 注册并取得自己的 `krx...` 收款账户。
-2. 双击 `PearlGuard-V2.2.0-Setup.exe`。
-3. 安装向导会显示本机识别到的显卡和自动生成的矿工名，可修改矿工名。
-4. 选择安装目录，完成安装。
-5. 如果安装器自动打开了程序，请**先点击“停止守护”**，进入“设置”，把“收款账户”换成自己的 `krx...` 账户并保存，再启动矿工。
-6. 默认不修改显卡风扇、功耗、核心偏移和显存偏移。
-
-安装包未使用商业代码签名证书，Windows 可能显示未知发布者提示。
-
-## 目录
-
-```text
-pearl_guard.py                 守护器源码
-gpu_info.py                    显卡和电脑型号探测
-installer/gpu_probe.ps1        安装器使用的显卡探测
-installer/config.template.json 首次安装配置模板
-installer/*.iss                Inno Setup 安装脚本
-assets/pearl.ico               程序与安装器图标
-build.ps1                      可重复构建脚本
-check_v2_2.py                  离线检查（不启动矿工）
-dist/PearlGuard-V2.2.0-Setup.exe
-```
-
-## 构建
-
-构建机需要 Python 3.13、PyQt6、PyInstaller 和 Inno Setup 6。
+构建机需要 Python 3.13、PyQt6、PyInstaller、Inno Setup 6 和 [官方 SRBMiner 3.8.0 Windows ZIP](https://github.com/doktor83/SRBMiner-Multi/releases/tag/3.8.0)。使用 `-Python`、`-ISCC`、`-MinerArchive` 指定本机路径。
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+pwsh -NoProfile -File .\build.ps1
 ```
 
-只重新打安装器：
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -SkipBuild
-```
-
-## 已验证
-
-- 守护器 Python 源码编译通过。
-- NVIDIA `RTX 3060 Laptop GPU` 自动识别为矿工名 `RTX3060`；AMD 型号转换示例通过。
-- 静默安装退出码 0，生成相对矿工路径、桌面快捷方式、开始菜单快捷方式和配置。
-- 静默覆盖安装保留自定义矿工名与风扇值。
-- 静默卸载退出码 0，保留用户配置供重装使用。
-- 新 EXE 通过现有单实例唤醒通道启动并退出码 0，没有新增挖矿进程。
-- 720p 级界面构造与滚动预览通过。
-- 安装器在未识别 AMD/NVIDIA 显卡时显示醒目警告，不静默使用空名称。
-
-## 尚未验证
-
-- 另一台真实 NVIDIA / AMD 电脑的完整安装和实际算力。
-- 不同显卡驱动的风扇、功耗和超频支持。
-- 真实用户操作下的 Alt+0、托盘和安装向导页面。
-
-SRBMiner 使用和设备条件请以其随包 `ReadMe.txt` 和 [官方参数](https://github.com/doktor83/SRBMiner-Multi/blob/3.8.0/Parameters)为准。
+如已构建 `dist/onefile/PearlGuard-V2.3.0.exe`，可加 `-SkipBuild` 仅重建安装器。构建脚本会输出对应 `.sha256` 文件。
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。任何人都可以免费使用、复制、修改、合并、发布、分发、再许可和商业使用；分发时请保留版权声明和许可证文本。
+守护器源码以 [MIT License](LICENSE) 提供。SRBMiner 及其附带组件按各自授权条款提供，见随包 `ReadMe.txt` 和 [官方仓库](https://github.com/doktor83/SRBMiner-Multi)。
